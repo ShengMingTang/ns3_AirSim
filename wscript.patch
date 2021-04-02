@@ -1,0 +1,128 @@
+--- /home/shengming/ns-3/ns-allinone-3.32/ns-3.32/wscript	2020-10-07 06:35:43.000000000 +0800
++++ wscript	2021-04-02 13:30:02.573484095 +0800
+@@ -365,6 +365,69 @@
+ 
+ def configure(conf):
+     conf.load('relocation', tooldir=['waf-tools'])
++    # @@added
++    import os
++    # AIRSIM_ROOT = '/home/shengming/AirSim/'
++    AIRSIM_ROOT = os.getenv('AIRSIM_ROOT')
++    print(f'using AIRSIM_ROOT as {AIRSIM_ROOT}')
++    RPCLIB_VERSION_FOLDER='rpclib-2.2.1'
++    
++    conf.load('compiler_c')
++    conf.load('compiler_cxx')
++    conf.env.append_value("CXXFLAGS", [
++        # common setup()
++        '-std=c++17', '-ggdb', 
++        # warning (not used)
++        # '-Wall', '-Wextra', '-Wno-variadic-macros', '-Wno-parentheses', '-Wno-unused-function', '-Wno-unused',
++        '-pthread',
++        
++        # Clang setup(not used)
++        # '-stdlib=libc++', 
++        # '-Wno-documentation', '-Wno-unknown-warning-option',
++
++        # to supress warning
++        '-Wno-unused-local-typedefs', '-Wno-deprecated',
++    ])
++    conf.env.append_value("DEFINES", [
++        'MSGPACK_PP_VARIADICS_MSVC=0', # AirSim/cmake/rpclib_wrapper/CMakeLists.txt
++        
++        # AirSim/Unity/AirLibWrapper/AirsimWrapper/cmake/rpc-setup.cmake
++        'ASIO_STANDALONE',
++        'RPCLIB_ASIO=clmdep_asio',
++        'RPCLIB_FMT=clmdep_fmt',
++        'RPCLIB_MSGPACK=clmdep_msgpack',
++        'RPCLIB_LINUX', # ${RPCLIB_OS_DEF}
++    ])
++    # AirSim/cmake/cmake-moduiles/CommonSetup.cmake
++    conf.env.append_value("CXX_EXP_LIB", ['-lc++fs', '-ferror-limit=10'])
++    # In {PROJECT_NAME}/CMakeLists.txt
++    conf.env.append_value('INCLUDES', [
++        # IncludeEigen()
++        f'{AIRSIM_ROOT}/AirLib/deps/eigen3',
++
++        # include_directories()
++        f'{AIRSIM_ROOT}/AirLib/include',
++        f'{AIRSIM_ROOT}/MavLinkCom',
++        f'{AIRSIM_ROOT}/MavLinkCom/include',
++        f'{AIRSIM_ROOT}/MavLinkCom/common_utils',
++
++        # rpclib includes
++        f'{AIRSIM_ROOT}/external/rpclib/{RPCLIB_VERSION_FOLDER}/include',
++        f'{AIRSIM_ROOT}/external/rpclib/{RPCLIB_VERSION_FOLDER}/dependencies/include',
++        f'{AIRSIM_ROOT}/external/rpclib/{RPCLIB_VERSION_FOLDER}/tests',
++        f'{AIRSIM_ROOT}/external/rpclib/{RPCLIB_VERSION_FOLDER}/examples',
++
++        *[name if os.path.isdir(name) else '' for name in os.listdir(f'{AIRSIM_ROOT}/external/rpclib/{RPCLIB_VERSION_FOLDER}')],
++        ]
++    )
++
++    # Add library search path
++    AIRSIM_LIBRARY_PATH = f'{AIRSIM_ROOT}/cmake/output/lib'
++    conf.env.append_value("STLIBPATH", [AIRSIM_LIBRARY_PATH])
++    conf.check_cxx(lib='AirLib')
++    conf.check_cxx(lib='rpc')
++    conf.check_cxx(lib='MavLinkCom')
++    # @@added
+ 
+     # attach some extra methods
+     conf.check_nonfatal = types.MethodType(_check_nonfatal, conf)
+@@ -756,8 +819,11 @@
+     return program
+ 
+ def create_ns3_program(bld, name, dependencies=('core',)):
+-    program = bld(features='cxx cxxprogram')
+-
++    # @@ switch
++    # program = bld(features='cxx cxxprogram')
++    # -----------------------------------------
++    program = bld(features='cxx cxxprogram', lib=['AirLib', 'MavLinkCom', 'rpc'])
++    # @@ switch
+     program.is_ns3_program = True
+     program.name = name
+     program.target = "%s%s-%s%s" % (wutils.APPNAME, wutils.VERSION, name, bld.env.BUILD_SUFFIX)
+@@ -768,10 +834,17 @@
+     program.use = program.ns3_module_dependencies.copy()
+     if program.env['ENABLE_STATIC_NS3']:
+         if sys.platform == 'darwin':
++            # @@switch
+             program.env.STLIB_MARKER = '-Wl,-all_load'
++            # program.env.STLIB_MARKER = '-Wl,-all_load -lAirLib -lrpc -lMavLinkCom'
++            # @@switch
+         else:
++            # @@switch
+             program.env.STLIB_MARKER = '-Wl,-Bstatic,--whole-archive'
+             program.env.SHLIB_MARKER = '-Wl,-Bdynamic,--no-whole-archive'
++            # program.env.STLIB_MARKER = '-Wl,-Bstatic,--whole-archive -lAirLib -lrpc -lMavLinkCom'
++            # program.env.SHLIB_MARKER = '-Wl,-Bdynamic,--no-whole-archive -lAirLib -lrpc -lMavLinkCom'
++            # @@switch
+     else:
+         if program.env.DEST_BINFMT == 'elf':
+             # All ELF platforms are impacted but only the gcc compiler has a flag to fix it.
+@@ -801,7 +874,6 @@
+ 
+ def add_scratch_programs(bld):
+     all_modules = [mod[len("ns3-"):] for mod in bld.env['NS3_ENABLED_MODULES'] + bld.env['NS3_ENABLED_CONTRIBUTED_MODULES']]
+-
+     try:
+         for filename in os.listdir("scratch"):
+             if filename.startswith('.') or filename == 'CVS':
+@@ -809,7 +881,14 @@
+             if os.path.isdir(os.path.join("scratch", filename)):
+                 obj = bld.create_ns3_program(filename, all_modules)
+                 obj.path = obj.path.find_dir('scratch').find_dir(filename)
+-                obj.source = obj.path.ant_glob('*.cc')
++                # @@added old
++                # obj.source = obj.path.ant_glob('*.cc')
++                # @@added new
++                obj.source = obj.path.ant_glob('**/*.cpp') + obj.path.ant_glob('**/*.c') + obj.path.ant_glob('**/*.cc')
++                # obj.target_link_Libraries('AirLib', 'MavLinkCom', 'rpc')
++                # obj.lib = obj.lib + ['AirLib', 'MavLinkCom', 'rpc']
++                # obj.libpath = ['AirLib/lib/x64']
++                # @@added new end
+                 obj.target = filename
+                 obj.name = obj.target
+                 obj.install_path = None
